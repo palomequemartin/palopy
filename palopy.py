@@ -5,6 +5,7 @@ from types import FunctionType
 import numpy as np
 from scipy.stats import chi2
 from scipy.special import comb
+import pandas as pd
 import sympy as sp
 
 
@@ -23,7 +24,7 @@ def get_time():
 def save(df, filename, path='.', time=True):
     
     if time:
-        df['Hora'] = get_time()
+        df['Hora'] = pd.Series([get_time()], index=[0])
     
     if exists(f'{path}/{filename}.csv') or exists(f'{path}/{filename} (0).csv') or exists(f'{path}/{filename}(0).csv'):
         i = 1
