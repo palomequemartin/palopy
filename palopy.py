@@ -5,7 +5,7 @@ from types import FunctionType
 import numpy as np
 from scipy.stats import chi2
 from scipy.special import comb
-import pandas as pd
+from pandas import Series
 import sympy as sp
 
 
@@ -24,7 +24,7 @@ def get_time():
 def save(df, filename, path='.', time=True):
     
     if time:
-        df['Hora'] = pd.Series([get_time()], index=[0])
+        df['Hora'] = Series([get_time()], index=[0])
     
     if exists(f'{path}/{filename}.csv') or exists(f'{path}/{filename} (0).csv') or exists(f'{path}/{filename}(0).csv'):
         i = 1
@@ -47,10 +47,12 @@ def mu_sigma(X):
     
     X = np.array(X)
     
-    E_X = np.mean(X)
-    Var_X = np.sum(X - E_X)**2 / (len(X) - 1)
+    N = len(X)
     
-    return E_X, np.sqrt(Var_X)
+    E_X = np.mean(X)
+    sigma_E_X = np.sqrt(np.sum(X - E_X)**2 / (N**2 - N))
+    
+    return E_X, sigma_E_X
 
 
 # Promedio pesado y su varianza
@@ -140,52 +142,57 @@ def propagation(Funcs, Data, Cov_Data):
 
 
 # Least squares for lineal parameters with correlated measurements
-def least_squares(f, x, y, sigma):
+def least_squares(F, X_data, Y_data, Cov_Y, p_value=False):
     
-    n = len(x)  # Numero de mediciones
-    k = f.__code__.co_argcount - 1  # Numero de parametros
-    parametros = f.__code__.co_varnames[1:k+1]
+    n_data = len(X_data)  # N of data points
+    n_params = F.__code__.co_argcount - 1  # N of parameters
+    params = sp.symbols(F.__code__.co_varnames[1:n_params+1])  # Parameters (like curve_fit)
+        
+    # Convert to array
+    X_data = np.array(X_data)
+    Y_data = np.array([np.array(Y_data)]).T
+    Cov_Y = np.array(Cov_Y)
+    # Only if Cov_Y is 1D assume independent and sqrt of variance
+    if len(Cov_Y.shape) == 1:
+        Cov_Y = np.diag(Cov_Y**2)
     
+    # Function correction for sympy if necessary
+    if 'np.' in getsource(F):
+        F_code = compile(getsource(F).replace('np.', 'sp.'), '', 'exec')
+        F = FunctionType(F_code.co_consts[0], globals(), "gfg")
     
-    # Conversion a array y definicion matriz sigma
-    x = np.array(x)
-    y = np.array([np.array(y)]).T
-    sigma = np.array(sigma)
-    # Si cov no es una matriz asumo que es raiz de var
-    if len(sigma.shape) == 1:
-        sigma = np.identity(n) * sigma**2
+    F = F(sp.symbols('X'), *params)  # Make functions to sympy expresion
     
-    
-    # Correccion de la funcion
-    if 'np.' in getsource(f):
-        f_code = compile(getsource(f).replace('np.', 'sp.'), '', 'exec')
-        f = FunctionType(f_code.co_consts[0], globals(), "gfg")
-    
-    f = f(sp.symbols('x'), *sp.symbols(parametros))
-    
-    
-    # Definicion de la matriz A
+    # A matrix definition
     A = []
-    for parametro in sp.symbols(parametros):
-        fprima_i = sp.diff(f, parametro).simplify()
-        if 'x' in str(fprima_i):
-            fprima_i = sp.lambdify('x', fprima_i)
-            A.append(fprima_i(x))
+    for param in params:
+        F_prime_i = sp.diff(F, param).simplify()
+        # If derivative is not constant evaluate on data
+        if 'X' in str(F_prime_i):
+            F_prime_i = sp.lambdify('X', F_prime_i)
+            A.append(F_prime_i(X_data))
+        # Else append n_data sized list of constant
         else:
-            fprima_i = n*[float(fprima_i)]
-            A.append(np.array(fprima_i))
-    
+            F_prime_i = n_data*[float(F_prime_i)]
+            A.append(np.array(F_prime_i))
     A = np.array(A).T
     
+    # Results
+    pcov = np.linalg.inv(A.T @ np.linalg.inv(Cov_Y) @ A)
+    popt = pcov @ A.T @ np.linalg.inv(Cov_Y) @ Y_data
     
-    # Resultados
-    pcov = np.linalg.inv(A.T @ np.linalg.inv(sigma) @ A)
-    popt = pcov @ A.T @ np.linalg.inv(sigma) @ y
+    if p_value:
+        
+        chi_sq = (Y_data - A @ popt).T @ np.linalg.inv(Cov_Y) @ (Y_data - A @ popt)
+        P = 1 - chi2.cdf(chi_sq[0,0], n_data - n_params)
+        
+        RETURN = (popt.T[0], pcov, P)
     
-    chi_sq = (y - A @ popt).T @ np.linalg.inv(sigma) @ (y - A @ popt)
-    P = 1 - chi2.cdf(chi_sq[0,0], n-k)
+    else:
+        
+        RETURN = (popt.T[0], pcov)
     
-    return popt.T[0], pcov, P
+    return RETURN
 
 
 # Lineal least squares
@@ -205,7 +212,7 @@ def lin_least_squares(x, y, sigma):
 
 
 
-### TESTS DE HIPOTESIS ###
+### FREQUENTIST HYPOTHESIS TESTS ###
 
 # Test chi cuadrado para datos en un histograma
 def chisq_test_hist(obs, exp, params_fit=0):
