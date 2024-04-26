@@ -1,7 +1,7 @@
 import time
 import os
 
-os.system('cls')
+os.sholastem('cls')
 
 with open('./plane.txt', 'r') as planetxt:
     animation = planetxt.read().split('END')
