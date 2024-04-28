@@ -92,53 +92,53 @@ def quadsum(*args):
 ### LEAST SQUARES AND ERROR PROPAGATION ###
 
 # General error propagation for multiple functions of data
-def propagation(Funcs, Data, Cov_Data):
+def propagate(functions, data, covariances):
     '''
-    Funcs is list of functions to which propagate error. Each must have the same parameters
-    Data is experimental data, parameters of every F in order
-    Cov_Data is covariance matrix or 1D array of sigmas of Data
+    Propagate error of multiple functions with the same parameters
+
+    functions:
+        Single function or list of functions to which propagate error.
+        Each must have the same parameters
+    data:
+        Experimental data, parameters of every f in order
+    covariances:
+        Covariance matrix or 1D array of sigmas of data
+
+    Returns:
+        Expected value and covariance matrix of function results
     '''
-    # Check if only 1 function and make subscriptable
-    is_callable = callable(Funcs)
-    if is_callable:
-        Funcs = [Funcs]
-    
-    n_Funcs = len(Funcs)  # N of functions
-    n_params = Funcs[0].__code__.co_argcount  # N of parameters
-    params = sp.symbols(Funcs[0].__code__.co_varnames[:n_params])  # Parameters
-    
-    # Convert to array
-    Data = np.array(Data)
-    Cov_Data = np.array(Cov_Data)
-    # Only if Cov_Data is 1D assume independent and sqrt of variance
-    if len(Cov_Data.shape) == 1:
-        Cov_Data = np.diag(Cov_Data**2)
-    
-    # Expected value for each function result [RETURN]
-    Expected = np.array([Func(*Data) for Func in Funcs])
-    
-    # Function correction for sympy if necessary
-    for i, Func in enumerate(Funcs):
-        if 'np.' in getsource(Func):
-            F_code = compile(getsource(Func).replace('np.', 'sp.'), '', 'exec')
-            Func = FunctionType(F_code.co_consts[0], globals(), "gfg")
-        Funcs[i] = Func(*params)  # Make functions to sympy expresion
-    
-    # Definition of matrix with function derivatives for each parameter
-    F_primes = np.zeros((n_Funcs, n_params))
-    for i, Func in enumerate(Funcs):
+    # Convert input to arrays
+    functions = list(functions)
+    data = np.array(data)
+    covariances = np.array(covariances)
+    # If covariances is 1D assume array of sigmas
+    if covariances.ndim == 1:
+        covariances = np.diag(covariances**2)
+
+    # Expected value of function results [RETURN]
+    expected = np.array([f(*data) for f in functions])
+
+    # Find number of functions and parameters
+    n_funcs = len(functions)  # N of functions
+    n_params = functions[0].__code__.co_argcount  # N of parameters
+    params = sp.symbols(functions[0].__code__.co_varnames[:n_params])  # Parameters
+
+    # Define matrix with function derivatives for each parameter
+    derivatives = np.zeros((n_funcs, n_params))
+    for i, f in enumerate(functions):
         for j, param in enumerate(params):
-            F_primes[i, j] = sp.lambdify(params, sp.diff(Func, param).simplify())(*Data)
-    
+            derivatives[i, j] = sp.lambdify(params, sp.diff(f, param).simplify())(*data)
+
     # Covariance matrix of function results [RETURN]
-    Covariance = F_primes @ Cov_Data @ F_primes.T
-    
+    covariance = derivatives @ covariances @ derivatives.T
+
     # Make into single numbers if only 1 function
-    if is_callable:
-        Expected = Expected[0]
-        Covariance = np.sqrt(Covariance[0,0])  # sqrt of variance
-    
-    return Expected, Covariance
+    if n_funcs == 1:
+        expected = expected[0]
+        covariance = np.sqrt(covariance[0, 0])  # Sigma
+
+    return expected, covariance
+
 
 
 # Least squares for lineal parameters with correlated measurements
