@@ -92,37 +92,52 @@ def quadsum(*args):
 ### LEAST SQUARES AND ERROR PROPAGATION ###
 
 # General error propagation for multiple functions of data
-def propagate(functions, data, covariances):
-    '''
+def propagation(functions, data, sigma):
+    """
     Propagate error of multiple functions with the same parameters
 
-    functions:
+    Parameters
+    ----------
+    functions : callable or sequence of callables
         Single function or list of functions to which propagate error.
-        Each must have the same parameters
-    data:
-        Experimental data, parameters of every f in order
-    covariances:
-        Covariance matrix or 1D array of sigmas of data
+        Each must have the same parameters.
+    data : array_like
+        Experimental data, parameters of every f in order.
+    sigma : array_like
+        If `sigma` is a 2-D array it should contain the covariance matrix
+        of errors of `data`. If `sigma` is a 1-D array it should contain
+        values of standard deviations of errors of `data`.
 
-    Returns:
-        Expected value and covariance matrix of function results
-    '''
-    # Convert input to arrays
+    Returns
+    -------
+    expected : array_like
+        Expected value of function results.
+    covariance : array_like
+        Covariance matrix of function results.
+    """
+    # Convert data and sigma to arrays and make functions subscriptable
     functions = list(functions)
     data = np.array(data)
-    covariances = np.array(covariances)
-    # If covariances is 1D assume array of sigmas
-    if covariances.ndim == 1:
-        covariances = np.diag(covariances**2)
+    sigma = np.array(sigma)
+    # If sigma is 1D assume array of standard deviations
+    if sigma.ndim == 1:
+        sigma = np.diag(sigma**2)
 
     # Expected value of function results [RETURN]
     expected = np.array([f(*data) for f in functions])
 
     # Find number of functions and parameters
-    n_funcs = len(functions)  # N of functions
-    n_params = functions[0].__code__.co_argcount  # N of parameters
+    n_funcs = len(functions)  # Number of functions
+    n_params = functions[0].__code__.co_argcount  # Number of parameters
     params = sp.symbols(functions[0].__code__.co_varnames[:n_params])  # Parameters
-
+    
+    # Function correction for sympy if necessary
+    for i, f in enumerate(functions):
+        if 'np.' in getsource(f):
+            f_code = compile(getsource(f).replace('np.', 'sp.'), '', 'exec')
+            f = FunctionType(f_code.co_consts[0], globals(), "gfg")
+        functions[i] = f(*params)  # Make functions to sympy expresion
+    
     # Define matrix with function derivatives for each parameter
     derivatives = np.zeros((n_funcs, n_params))
     for i, f in enumerate(functions):
@@ -130,69 +145,94 @@ def propagate(functions, data, covariances):
             derivatives[i, j] = sp.lambdify(params, sp.diff(f, param).simplify())(*data)
 
     # Covariance matrix of function results [RETURN]
-    covariance = derivatives @ covariances @ derivatives.T
+    covariance = derivatives @ sigma @ derivatives.T
 
     # Make into single numbers if only 1 function
     if n_funcs == 1:
         expected = expected[0]
-        covariance = np.sqrt(covariance[0, 0])  # Sigma
+        covariance = np.sqrt(covariance[0, 0])  # standard deviation
 
     return expected, covariance
 
 
-
 # Least squares for lineal parameters with correlated measurements
-def least_squares(F, X_data, Y_data, Cov_Y, p_value=False):
+def least_squares(f, xdata, ydata, sigma, chi2_test=True):
+    """
+    Least squares for a linear function in the parameters and for
+    measurements with covariance.
+
+    Parameters
+    ----------
+    f : callable
+        Function to fit, must be defined as f(x, *params), must be lineal
+        in the parameters.
+    xdata : array_like
+        Experimental data in the independent variable.
+    ydata : array_like
+        Experimental data in the dependent variable.
+    sigma : array_like
+        If `sigma` is a 2-D array it should contain the covariance matrix
+        of errors of `ydata`. If `sigma` is a 1-D array it should contain
+        values of standard deviations of errors of `ydata`.
+    chi2_test : bool, optional
+        If True, returns the p-value of a chi-squared test of the fit
+        (default is True).
+
+    Returns
+    -------
+    popt: array_like
+        Optimal values of parameters.
+    pcov: array_like
+        Covariance matrix of parameters.
+    p_value: float, optional
+        p-value of the test if chi2_test is True.
+    """
+    # Convert inputs to array, ydata must be a column vector
+    xdata = np.array(xdata)
+    ydata = np.array([np.array(ydata)]).T
+    sigma = np.array(sigma)
+    # If sigma is 1D assume array of standard deviations
+    if sigma.ndim == 1:
+        sigma = np.diag(sigma**2)
     
-    n_data = len(X_data)  # N of data points
-    n_params = F.__code__.co_argcount - 1  # N of parameters
-    params = sp.symbols(F.__code__.co_varnames[1:n_params+1])  # Parameters (like curve_fit)
-        
-    # Convert to array
-    X_data = np.array(X_data)
-    Y_data = np.array([np.array(Y_data)]).T
-    Cov_Y = np.array(Cov_Y)
-    # Only if Cov_Y is 1D assume independent and sqrt of variance
-    if len(Cov_Y.shape) == 1:
-        Cov_Y = np.diag(Cov_Y**2)
+    # Find number of data points and parameters
+    n_data = len(xdata)  # Number of data points
+    n_params = f.__code__.co_argcount - 1  # Number of parameters
+    params = sp.symbols(f.__code__.co_varnames[1:n_params+1])  # Parameters
     
     # Function correction for sympy if necessary
-    if 'np.' in getsource(F):
-        F_code = compile(getsource(F).replace('np.', 'sp.'), '', 'exec')
-        F = FunctionType(F_code.co_consts[0], globals(), "gfg")
+    if 'np.' in getsource(f):
+        f_code = compile(getsource(f).replace('np.', 'sp.'), '', 'exec')
+        f = FunctionType(f_code.co_consts[0], globals(), "gfg")
     
-    F = F(sp.symbols('X'), *params)  # Make functions to sympy expresion
+    f = f(sp.symbols('X'), *params)  # Make functions to sympy expresion
     
-    # A matrix definition
-    A = []
+    # Define matrix with functions only dependant on x
+    functions_x = []
     for param in params:
-        F_prime_i = sp.diff(F, param).simplify()
+        derivative_i = sp.diff(f, param).simplify()
         # If derivative is not constant evaluate on data
-        if 'X' in str(F_prime_i):
-            F_prime_i = sp.lambdify('X', F_prime_i)
-            A.append(F_prime_i(X_data))
+        if 'X' in str(derivative_i):
+            derivative_i = sp.lambdify('X', derivative_i)
+            functions_x.append(derivative_i(xdata))
         # Else append n_data sized list of constant
         else:
-            F_prime_i = n_data*[float(F_prime_i)]
-            A.append(np.array(F_prime_i))
-    A = np.array(A).T
+            derivative_i = n_data*[float(derivative_i)]
+            functions_x.append(np.array(derivative_i))
+    functions_x = np.array(functions_x).T
     
     # Results
-    pcov = np.linalg.inv(A.T @ np.linalg.inv(Cov_Y) @ A)
-    popt = pcov @ A.T @ np.linalg.inv(Cov_Y) @ Y_data
+    pcov = np.linalg.inv(functions_x.T @ np.linalg.inv(sigma) @ functions_x)
+    popt = pcov @ functions_x.T @ np.linalg.inv(sigma) @ ydata
     
-    if p_value:
+    if chi2_test:
         
-        chi_sq = (Y_data - A @ popt).T @ np.linalg.inv(Cov_Y) @ (Y_data - A @ popt)
-        P = 1 - chi2.cdf(chi_sq[0,0], n_data - n_params)
+        chi_sq = (ydata - functions_x @ popt).T @ np.linalg.inv(sigma) @ (ydata - functions_x @ popt)
+        p_value = chi2.sf(chi_sq[0,0], n_data - n_params)
         
-        RETURN = (popt.T[0], pcov, P)
+        return popt.T[0], pcov, p_value
     
-    else:
-        
-        RETURN = (popt.T[0], pcov)
-    
-    return RETURN
+    return popt.T[0], pcov
 
 
 # Lineal least squares
