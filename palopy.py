@@ -91,7 +91,6 @@ def quadsum(*args):
 
 ### LEAST SQUARES AND ERROR PROPAGATION ###
 
-# General error propagation for multiple functions of data
 def propagation(functions, data, sigma):
     """
     Propagate error of multiple functions with the same parameters
@@ -100,7 +99,7 @@ def propagation(functions, data, sigma):
     ----------
     functions : callable or sequence of callables
         Single function or list of functions to which propagate error.
-        Each must have the same parameters.
+        Each must have the same parameters, even if some are not used.
     data : array_like
         Experimental data, parameters of every f in order.
     sigma : array_like
@@ -155,7 +154,6 @@ def propagation(functions, data, sigma):
     return expected, covariance
 
 
-# Least squares for lineal parameters with correlated measurements
 def least_squares(f, xdata, ydata, sigma, chi2_test=True):
     """
     Least squares for a linear function in the parameters and for
@@ -164,8 +162,8 @@ def least_squares(f, xdata, ydata, sigma, chi2_test=True):
     Parameters
     ----------
     f : callable
-        Function to fit, must be defined as f(x, *params), must be lineal
-        in the parameters.
+        Function to fit, must be defined as f(x, *parameters), must be
+        lineal in the parameters.
     xdata : array_like
         Experimental data in the independent variable.
     ydata : array_like
@@ -180,54 +178,40 @@ def least_squares(f, xdata, ydata, sigma, chi2_test=True):
 
     Returns
     -------
-    popt: array_like
+    popt : array_like
         Optimal values of parameters.
-    pcov: array_like
+    pcov : array_like
         Covariance matrix of parameters.
-    p_value: float, optional
+    p_value : float, optional
         p-value of the test if chi2_test is True.
     """
     # Convert inputs to array, ydata must be a column vector
     xdata = np.array(xdata)
-    ydata = np.array([np.array(ydata)]).T
     sigma = np.array(sigma)
-    # If sigma is 1D assume array of standard deviations
+    # If sigma is 1-D assume array of standard deviations
     if sigma.ndim == 1:
         sigma = np.diag(sigma**2)
     
     # Find number of data points and parameters
     n_data = len(xdata)  # Number of data points
     n_params = f.__code__.co_argcount - 1  # Number of parameters
-    params = sp.symbols(f.__code__.co_varnames[1:n_params+1])  # Parameters
     
-    # Function correction for sympy if necessary
-    if 'np.' in getsource(f):
-        f_code = compile(getsource(f).replace('np.', 'sp.'), '', 'exec')
-        f = FunctionType(f_code.co_consts[0], globals(), "gfg")
+    # If a constant term is present in the function, remove it from ydata
+    # before optimization since it does not affect the optimization of parameters
+    constant = f(xdata, *np.zeros(n_params))
+    ydata = np.array([np.array(ydata) - constant]).T
     
-    f = f(sp.symbols('X'), *params)  # Make functions to sympy expresion
-    
-    # Define matrix with functions only dependant on x
-    functions_x = []
-    for param in params:
-        derivative_i = sp.diff(f, param).simplify()
-        # If derivative is not constant evaluate on data
-        if 'X' in str(derivative_i):
-            derivative_i = sp.lambdify('X', derivative_i)
-            functions_x.append(derivative_i(xdata))
-        # Else append n_data sized list of constant
-        else:
-            derivative_i = n_data*[float(derivative_i)]
-            functions_x.append(np.array(derivative_i))
-    functions_x = np.array(functions_x).T
+    # Define matrix with every f(x) evaluated in data by isolating each parameter
+    functions_x = np.array([f(xdata, *row) - constant for row in np.identity(n_params)])
     
     # Results
-    pcov = np.linalg.inv(functions_x.T @ np.linalg.inv(sigma) @ functions_x)
-    popt = pcov @ functions_x.T @ np.linalg.inv(sigma) @ ydata
+    sigma_inv = np.linalg.inv(sigma)
+    pcov = np.linalg.inv(functions_x @ sigma_inv @ functions_x.T)
+    popt = pcov @ functions_x @ sigma_inv @ ydata
     
     if chi2_test:
         
-        chi_sq = (ydata - functions_x @ popt).T @ np.linalg.inv(sigma) @ (ydata - functions_x @ popt)
+        chi_sq = (ydata - functions_x.T @ popt).T @ sigma_inv @ (ydata - functions_x.T @ popt)
         p_value = chi2.sf(chi_sq[0,0], n_data - n_params)
         
         return popt.T[0], pcov, p_value
