@@ -50,7 +50,7 @@ def mu_sigma(X):
     N = len(X)
     
     E_X = np.mean(X)
-    sigma_E_X = np.sqrt(np.sum(X - E_X)**2 / (N**2 - N))
+    sigma_E_X = np.sqrt(np.sum((X - E_X)**2) / (N**2 - N))
     
     return E_X, sigma_E_X
 
@@ -97,7 +97,7 @@ def propagation(functions, data, sigma):
 
     Parameters
     ----------
-    functions : callable or sequence of callables
+    functions : callable or list of callables
         Single function or list of functions to which propagate error.
         Each must have the same parameters, even if some are not used.
     data : array_like
@@ -115,7 +115,8 @@ def propagation(functions, data, sigma):
         Covariance matrix of function results.
     """
     # Convert data and sigma to arrays and make functions subscriptable
-    functions = list(functions)
+    if callable(functions):
+        functions = [functions]
     data = np.array(data)
     sigma = np.array(sigma)
     # If sigma is 1D assume array of standard deviations
@@ -196,8 +197,7 @@ def least_squares(f, xdata, ydata, sigma, chi2_test=True):
     n_data = len(xdata)  # Number of data points
     n_params = f.__code__.co_argcount - 1  # Number of parameters
     
-    # If a constant term is present in the function, remove it from ydata
-    # before optimization since it does not affect the optimization of parameters
+    # Constant term in f does not affect the optimization of parameters
     constant = f(xdata, *np.zeros(n_params))
     ydata = np.array([np.array(ydata) - constant]).T
     
